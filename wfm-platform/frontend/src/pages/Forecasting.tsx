@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react"
 import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
 import { PageHeader } from "@/components/page-header"
+import { RampPlanner } from "@/components/ramp-planner"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -179,6 +180,10 @@ export function Forecasting() {
           </div>
         </CardContent>
       </Card>
+
+      <div className="mt-4">
+        <RampPlanner />
+      </div>
     </>
   )
 }

@@ -1,4 +1,7 @@
 // Forecasting engine — statistical + ML methods, back-tested with MAPE.
+// Trains on ~3 years of history (see history.ts). The ML models use intraday,
+// weekly AND annual (day-of-year) seasonality features so the long history pays off.
+import { dayOfYear, TODAY } from "./dates"
 import { HISTORY_DAYS, historyFor } from "./history"
 import type { ForecastMethod, MethodResult } from "./types"
 
@@ -12,7 +15,14 @@ function intervalFeatures(i: number): number[] {
   ]
 }
 function dowFeatures(dow: number): number[] {
-  return [Math.sin((TWO_PI * dow) / 7), Math.cos((TWO_PI * dow) / 7)]
+  // weighted a little heavier so weekday similarity dominates
+  return [1.4 * Math.sin((TWO_PI * dow) / 7), 1.4 * Math.cos((TWO_PI * dow) / 7)]
+}
+function doyFeatures(doy: number): number[] {
+  return [
+    Math.sin((TWO_PI * doy) / 365), Math.cos((TWO_PI * doy) / 365),
+    Math.sin((2 * TWO_PI * doy) / 365), Math.cos((2 * TWO_PI * doy) / 365),
+  ]
 }
 
 // ---- statistical ----
@@ -21,19 +31,20 @@ function seasonalNaive(days: number[][], dows: number[], targetDow: number): num
   return days[days.length - 1].slice()
 }
 
-function movingAverage(days: number[][], dows: number[], targetDow: number, _t: number, K = 4): number[] {
+function movingAverage(days: number[][], dows: number[], targetDow: number): number[] {
+  const K = 6 // last 6 matching-weekday days → reflects the current annual phase
   const sameDow = days.filter((_, d) => dows[d] === targetDow)
   const pool = (sameDow.length >= 2 ? sameDow : days).slice(-K)
-  return Array.from({ length: M }, (_, i) =>
-    Math.round(pool.reduce((a, day) => a + day[i], 0) / pool.length),
-  )
+  return Array.from({ length: M }, (_, i) => Math.round(pool.reduce((a, day) => a + day[i], 0) / pool.length))
 }
 
-function holtWinters(days: number[][], dows: number[], targetDow: number, _t: number): number[] {
+function holtWinters(days: number[][], dows: number[], targetDow: number): number[] {
   const alpha = 0.4, beta = 0.04, gamma = 0.3
-  const Y = days.flat()
+  // train on the last ~26 weeks only — keeps it responsive to the current level/season
+  const recent = days.slice(-182)
+  const Y = recent.flat()
   const n = Y.length
-  if (n < 2 * M) return movingAverage(days, dows, targetDow, _t)
+  if (n < 2 * M) return movingAverage(days, dows, targetDow)
   const mean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length
   let level = mean(Y.slice(0, M))
   let trend = (mean(Y.slice(M, 2 * M)) - mean(Y.slice(0, M))) / M
@@ -48,7 +59,7 @@ function holtWinters(days: number[][], dows: number[], targetDow: number, _t: nu
   return Array.from({ length: M }, (_, h) => Math.max(0, Math.round(level + (h + 1) * trend + seasonal[h % M])))
 }
 
-// ---- ML ----
+// ---- ML: linear regression (OLS) ----
 function gaussianSolve(A: number[][], b: number[]): number[] {
   const n = b.length
   const m = A.map((row, i) => [...row, b[i]])
@@ -66,55 +77,93 @@ function gaussianSolve(A: number[][], b: number[]): number[] {
   return m.map((row, i) => row[n] / (m[i][i] || 1e-9))
 }
 
-function lrRow(i: number, dow: number, dayNorm: number): number[] {
-  return [1, ...intervalFeatures(i), ...dowFeatures(dow), dayNorm]
+// Precompute the intraday feature rows once (shared across every fit).
+const IF: number[][] = Array.from({ length: M }, (_, i) => intervalFeatures(i))
+const P = 12 // [1, 4 interval, 2 dow, 4 doy, 1 trend]
+
+// Cache the fitted weights by training-array identity. historyFor returns stable
+// references, so range/forward forecasts (same full history) fit once and reuse.
+const lrCache = new WeakMap<number[][], number[]>()
+
+function linearRegression(
+  days: number[][], dows: number[], targetDow: number, targetDayIdx: number,
+  doys?: number[], targetDoy?: number,
+): number[] {
+  const dy = doys ?? days.map((_, d) => d)
+  const tDoy = targetDoy ?? 0
+  let w = lrCache.get(days)
+  if (!w) {
+    // day-level feature segment (dow + doy + trend) — allocate per day, not per row
+    const DP = days.map((_, d) => [...dowFeatures(dows[d]), ...doyFeatures(dy[d]), d / HISTORY_DAYS])
+    const XtX = Array.from({ length: P }, () => new Array(P).fill(0))
+    const Xty = new Array(P).fill(0)
+    const row = new Array(P)
+    for (let d = 0; d < days.length; d++) {
+      const dp = DP[d]
+      const day = days[d]
+      for (let i = 0; i < M; i++) {
+        const f = IF[i]
+        row[0] = 1
+        row[1] = f[0]; row[2] = f[1]; row[3] = f[2]; row[4] = f[3]
+        row[5] = dp[0]; row[6] = dp[1]; row[7] = dp[2]; row[8] = dp[3]; row[9] = dp[4]; row[10] = dp[5]; row[11] = dp[6]
+        const yv = day[i]
+        for (let a = 0; a < P; a++) {
+          Xty[a] += row[a] * yv
+          for (let b = a; b < P; b++) XtX[a][b] += row[a] * row[b]
+        }
+      }
+    }
+    for (let a = 0; a < P; a++) {
+      for (let b = 0; b < a; b++) XtX[a][b] = XtX[b][a]
+      XtX[a][a] += 1e-3
+    }
+    w = gaussianSolve(XtX, Xty)
+    lrCache.set(days, w)
+  }
+  const dn = targetDayIdx / HISTORY_DAYS
+  const td = dowFeatures(targetDow)
+  const ty = doyFeatures(tDoy)
+  return Array.from({ length: M }, (_, i) => {
+    const f = IF[i]
+    const r = [1, f[0], f[1], f[2], f[3], td[0], td[1], ty[0], ty[1], ty[2], ty[3], dn]
+    let s = 0
+    for (let k = 0; k < P; k++) s += r[k] * w![k]
+    return Math.max(0, Math.round(s))
+  })
 }
 
-function linearRegression(days: number[][], dows: number[], targetDow: number, targetDayIdx: number): number[] {
-  const X: number[][] = []
-  const y: number[] = []
-  days.forEach((day, d) => {
-    day.forEach((v, i) => {
-      X.push(lrRow(i, dows[d], d / HISTORY_DAYS))
-      y.push(v)
-    })
-  })
-  const p = X[0].length
-  const XtX = Array.from({ length: p }, () => new Array(p).fill(0))
-  const Xty = new Array(p).fill(0)
-  for (let r = 0; r < X.length; r++) {
-    for (let a = 0; a < p; a++) {
-      Xty[a] += X[r][a] * y[r]
-      for (let b = a; b < p; b++) XtX[a][b] += X[r][a] * X[r][b]
+// ---- ML: k-NN — average the K nearest same-weekday days by time-of-year + trend ----
+function knn(
+  days: number[][], dows: number[], targetDow: number, targetDayIdx: number,
+  doys?: number[], targetDoy?: number,
+): number[] {
+  const K = 8
+  const dy = doys ?? days.map((_, d) => d)
+  const tDoy = targetDoy ?? 0
+  // hard-filter to the same weekday (fall back to all if too few)
+  let cand: number[] = []
+  for (let d = 0; d < days.length; d++) if (dows[d] === targetDow) cand.push(d)
+  if (cand.length < K) cand = days.map((_, d) => d)
+
+  const q = doyFeatures(tDoy)
+  const qt = targetDayIdx / HISTORY_DAYS
+  const best: { d: number; dist: number }[] = []
+  let worst = Infinity
+  for (const d of cand) {
+    const f = doyFeatures(dy[d])
+    let dist = (d / HISTORY_DAYS - qt) ** 2 * 0.6
+    for (let k = 0; k < 4; k++) dist += (f[k] - q[k]) ** 2
+    if (best.length < K) {
+      best.push({ d, dist })
+      if (best.length === K) worst = Math.max(...best.map((b) => b.dist))
+    } else if (dist < worst) {
+      let mi = 0
+      for (let j = 1; j < K; j++) if (best[j].dist > best[mi].dist) mi = j
+      best[mi] = { d, dist }
+      worst = Math.max(...best.map((b) => b.dist))
     }
   }
-  for (let a = 0; a < p; a++) {
-    for (let b = 0; b < a; b++) XtX[a][b] = XtX[b][a]
-    XtX[a][a] += 1e-4
-  }
-  const w = gaussianSolve(XtX, Xty)
-  const dn = (targetDayIdx ?? HISTORY_DAYS) / HISTORY_DAYS
-  return Array.from({ length: M }, (_, i) => {
-    const row = lrRow(i, targetDow, dn)
-    return Math.max(0, Math.round(row.reduce((s, x, k) => s + x * w[k], 0)))
-  })
-}
-
-const dist2 = (a: number[], b: number[]) => a.reduce((s, x, i) => s + (x - b[i]) ** 2, 0)
-
-function knn(days: number[][], dows: number[], targetDow: number, targetDayIdx: number, k = 8): number[] {
-  const samples: { f: number[]; v: number }[] = []
-  days.forEach((day, d) => {
-    day.forEach((v, i) => {
-      samples.push({ f: [...intervalFeatures(i), ...dowFeatures(dows[d]), (d / HISTORY_DAYS) * 0.6], v })
-    })
-  })
-  const dn = ((targetDayIdx ?? HISTORY_DAYS) / HISTORY_DAYS) * 0.6
-  return Array.from({ length: M }, (_, i) => {
-    const q = [...intervalFeatures(i), ...dowFeatures(targetDow), dn]
-    const scored = samples.map((s) => ({ v: s.v, dist: dist2(s.f, q) })).sort((a, b) => a.dist - b.dist).slice(0, k)
-    return Math.round(scored.reduce((a, s) => a + s.v, 0) / scored.length)
-  })
+  return Array.from({ length: M }, (_, i) => Math.round(best.reduce((a, b) => a + days[b.d][i], 0) / best.length))
 }
 
 export const METHODS: ForecastMethod[] = [
@@ -145,13 +194,14 @@ export interface Backtest {
 }
 
 export function backtest(queueId: string): Backtest {
-  const { days, dows } = historyFor(queueId)
+  const { days, dows, doys } = historyFor(queueId)
   const L = days.length - 1
   const train = days.slice(0, L)
   const trainDows = dows.slice(0, L)
+  const trainDoys = doys.slice(0, L)
   const holdout = days[L]
   const perMethod: MethodResult[] = METHODS.map((m) => {
-    const forecast = m.fn(train, trainDows, dows[L], L)
+    const forecast = m.fn(train, trainDows, dows[L], L, trainDoys, doys[L])
     return { id: m.id, name: m.name, kind: m.kind, mape: mape(forecast, holdout), pred: forecast }
   })
   const best = perMethod.reduce((a, b) => (b.mape < a.mape ? b : a))
@@ -159,8 +209,8 @@ export function backtest(queueId: string): Backtest {
 }
 
 export function generate(queueId: string, methodId: string): number[] {
-  const { days, dows } = historyFor(queueId)
+  const { days, dows, doys } = historyFor(queueId)
   const m = methodById[methodId] ?? METHODS[0]
   const targetDow = (dows[dows.length - 1] + 1) % 7
-  return m.fn(days, dows, targetDow, HISTORY_DAYS)
+  return m.fn(days, dows, targetDow, HISTORY_DAYS, doys, dayOfYear(TODAY))
 }

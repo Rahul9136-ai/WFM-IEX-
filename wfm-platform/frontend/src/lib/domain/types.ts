@@ -72,6 +72,8 @@ export type ForecastFn = (
   dows: number[],
   targetDow: number,
   targetDayIdx: number,
+  doys?: number[],
+  targetDoy?: number,
 ) => number[]
 
 export interface ForecastMethod {

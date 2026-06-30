@@ -4,7 +4,7 @@ import { historyFor, HISTORY_DAYS } from '../data/history.js'
 import { INTERVALS } from '../data/seed.js'
 import { METHODS, methodById, mape } from './forecast.js'
 import { buildPlan, summarisePlan } from './planning.js'
-import { enumerateDays, dowOf, dayIndex, fmtDay, fmtShort, weekKey, weekLabel, monthKey, monthLabel } from './dates.js'
+import { enumerateDays, dowOf, dayIndex, dayOfYear, fmtDay, fmtShort, weekKey, weekLabel, monthKey, monthLabel } from './dates.js'
 
 export const GRANULARITIES = [
   { id: 'daily',   name: 'Daily',   sub: 'one day · 30-min intervals' },
@@ -14,20 +14,20 @@ export const GRANULARITIES = [
 
 const DOW_NAME = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const sum = (a) => a.reduce((x, y) => x + y, 0)
-const dayTotal = (m, days, dows, dow, idx) => sum(m.fn(days, dows, dow, idx))
+const dayTotal = (m, days, dows, dow, idx, doys, doy) => sum(m.fn(days, dows, dow, idx, doys, doy))
 
 // ---- back-test (drives the per-method MAPE + the back-test chart) ----
 // Resolution: daily → 24 interval values of the held-out day; weekly → 7 daily
 // totals; monthly → 14 daily totals. Lower MAPE = tighter fit.
 export function backtestG(queueId, gran) {
-  const { days, dows } = historyFor(queueId)
+  const { days, dows, doys } = historyFor(queueId)
 
   if (gran === 'daily') {
     const L = days.length - 1
-    const train = days.slice(0, L), tdows = dows.slice(0, L)
+    const train = days.slice(0, L), tdows = dows.slice(0, L), tdoys = doys.slice(0, L)
     const actual = days[L]
     const perMethod = METHODS.map((m) => {
-      const pred = m.fn(train, tdows, dows[L], L)
+      const pred = m.fn(train, tdows, dows[L], L, tdoys, doys[L])
       return { id: m.id, name: m.name, kind: m.kind, mape: mape(pred, actual), pred }
     })
     const best = perMethod.reduce((a, b) => (b.mape < a.mape ? b : a))
@@ -44,7 +44,7 @@ export function backtestG(queueId, gran) {
   const perMethod = METHODS.map((m) => {
     const pred = []
     for (let d = start; d < days.length; d++) {
-      pred.push(dayTotal(m, days.slice(0, d), dows.slice(0, d), dows[d], d))
+      pred.push(dayTotal(m, days.slice(0, d), dows.slice(0, d), dows[d], d, doys.slice(0, d), doys[d]))
     }
     return { id: m.id, name: m.name, kind: m.kind, mape: mape(pred, actual), pred }
   })
@@ -58,19 +58,19 @@ export function backtestG(queueId, gran) {
 
 // 24-interval forecast profile for a single calendar date.
 export function dayProfile(queueId, date, methodId) {
-  const { days, dows } = historyFor(queueId)
+  const { days, dows, doys } = historyFor(queueId)
   const m = methodById[methodId] ?? METHODS[0]
-  return m.fn(days, dows, dowOf(date), dayIndex(date, HISTORY_DAYS))
+  return m.fn(days, dows, dowOf(date), dayIndex(date, HISTORY_DAYS), doys, dayOfYear(date))
 }
 
 export function rangePlan(queueId, start, end, gran, methodId, aht, queue, shrinkage, agents) {
   const dates = enumerateDays(start, end)
-  const { days, dows } = historyFor(queueId)
+  const { days, dows, doys } = historyFor(queueId)
   const m = methodById[methodId] ?? METHODS[0]
 
   // per-day summaries across the range
   const perDay = dates.map((date) => {
-    const profile = m.fn(days, dows, dowOf(date), dayIndex(date, HISTORY_DAYS))
+    const profile = m.fn(days, dows, dowOf(date), dayIndex(date, HISTORY_DAYS), doys, dayOfYear(date))
     const s = summarisePlan(buildPlan(profile, aht, queue, shrinkage, agents))
     return { date, volume: s.totalVol, reqH: s.reqHours, schedH: s.schedHours, wSL: s.wSL }
   })

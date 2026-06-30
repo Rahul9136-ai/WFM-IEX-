@@ -22,3 +22,10 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
+
+# tsc -b emitted config artifacts
+*.tsbuildinfo
+wfm-platform/frontend/vite.config.js
+wfm-platform/frontend/vite.config.d.ts
+wfm-platform/frontend/tailwind.config.js
+wfm-platform/frontend/tailwind.config.d.ts

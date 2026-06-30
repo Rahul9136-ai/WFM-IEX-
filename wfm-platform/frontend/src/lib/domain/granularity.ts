@@ -1,5 +1,5 @@
 // Granularity + date-range rollups over the day-level engine.
-import { dayIndex, dowOf, enumerateDays, fmtDay, monthKey, monthLabel, weekKey, weekLabel } from "./dates"
+import { dayIndex, dayOfYear, dowOf, enumerateDays, fmtDay, monthKey, monthLabel, weekKey, weekLabel } from "./dates"
 import { METHODS, mape, methodById } from "./forecast"
 import { HISTORY_DAYS, historyFor } from "./history"
 import { buildPlan, summarisePlan } from "./planning"
@@ -15,8 +15,10 @@ export type GranId = (typeof GRANULARITIES)[number]["id"]
 
 const DOW_NAME = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0)
-const dayTotal = (m: (typeof METHODS)[number], days: number[][], dows: number[], dow: number, idx: number) =>
-  sum(m.fn(days, dows, dow, idx))
+const dayTotal = (
+  m: (typeof METHODS)[number], days: number[][], dows: number[], dow: number, idx: number,
+  doys: number[], doy: number,
+) => sum(m.fn(days, dows, dow, idx, doys, doy))
 
 export interface BacktestG {
   perMethod: MethodResult[]
@@ -28,15 +30,16 @@ export interface BacktestG {
 }
 
 export function backtestG(queueId: string, gran: GranId): BacktestG {
-  const { days, dows } = historyFor(queueId)
+  const { days, dows, doys } = historyFor(queueId)
 
   if (gran === "daily") {
     const L = days.length - 1
     const train = days.slice(0, L)
     const tdows = dows.slice(0, L)
+    const tdoys = doys.slice(0, L)
     const actual = days[L]
     const perMethod = METHODS.map((m) => {
-      const pred = m.fn(train, tdows, dows[L], L)
+      const pred = m.fn(train, tdows, dows[L], L, tdoys, doys[L])
       return { id: m.id, name: m.name, kind: m.kind, mape: mape(pred, actual), pred }
     })
     const best = perMethod.reduce((a, b) => (b.mape < a.mape ? b : a))
@@ -53,7 +56,9 @@ export function backtestG(queueId: string, gran: GranId): BacktestG {
   }
   const perMethod = METHODS.map((m) => {
     const pred: number[] = []
-    for (let d = start; d < days.length; d++) pred.push(dayTotal(m, days.slice(0, d), dows.slice(0, d), dows[d], d))
+    for (let d = start; d < days.length; d++) {
+      pred.push(dayTotal(m, days.slice(0, d), dows.slice(0, d), dows[d], d, doys.slice(0, d), doys[d]))
+    }
     return { id: m.id, name: m.name, kind: m.kind, mape: mape(pred, actual), pred }
   })
   const best = perMethod.reduce((a, b) => (b.mape < a.mape ? b : a))
@@ -61,9 +66,9 @@ export function backtestG(queueId: string, gran: GranId): BacktestG {
 }
 
 export function dayProfile(queueId: string, date: Date, methodId: string): number[] {
-  const { days, dows } = historyFor(queueId)
+  const { days, dows, doys } = historyFor(queueId)
   const m = methodById[methodId] ?? METHODS[0]
-  return m.fn(days, dows, dowOf(date), dayIndex(date, HISTORY_DAYS))
+  return m.fn(days, dows, dowOf(date), dayIndex(date, HISTORY_DAYS), doys, dayOfYear(date))
 }
 
 export interface RangePlan {
@@ -86,11 +91,11 @@ export function rangePlan(
   agents: Agent[],
 ): RangePlan {
   const dates = enumerateDays(start, end)
-  const { days, dows } = historyFor(queueId)
+  const { days, dows, doys } = historyFor(queueId)
   const m = methodById[methodId] ?? METHODS[0]
 
   const perDay = dates.map((date) => {
-    const profile = m.fn(days, dows, dowOf(date), dayIndex(date, HISTORY_DAYS))
+    const profile = m.fn(days, dows, dowOf(date), dayIndex(date, HISTORY_DAYS), doys, dayOfYear(date))
     const s = summarisePlan(buildPlan(profile, aht, queue, shrinkage, agents))
     return { date, volume: s.totalVol, reqH: s.reqHours, schedH: s.schedHours, wSL: s.wSL }
   })

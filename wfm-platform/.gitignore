@@ -25,10 +25,3 @@ Thumbs.db
 *.pem
 *.key
 data/
-
-# tsc -b composite build artifacts
-*.tsbuildinfo
-frontend/vite.config.js
-frontend/vite.config.d.ts
-frontend/tailwind.config.js
-frontend/tailwind.config.d.ts

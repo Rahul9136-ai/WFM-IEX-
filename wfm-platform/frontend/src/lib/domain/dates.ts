@@ -24,6 +24,12 @@ export function parseYMD(s: string): Date {
 export const daysBetween = (a: Date, b: Date) =>
   Math.round((startOfDay(b).getTime() - startOfDay(a).getTime()) / DAY_MS)
 
+// Day-of-year (1..366) — used as the annual-seasonality feature for forecasting.
+export function dayOfYear(d: Date): number {
+  const yearStart = new Date(d.getFullYear(), 0, 0)
+  return Math.floor((startOfDay(d).getTime() - yearStart.getTime()) / DAY_MS)
+}
+
 export function enumerateDays(start: Date, end: Date, cap = 92): Date[] {
   const out: Date[] = []
   let cur = startOfDay(start)
