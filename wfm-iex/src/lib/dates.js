@@ -28,8 +28,11 @@ export function dayOfYear(d) {
   return Math.floor((startOfDay(d) - yearStart) / DAY_MS)
 }
 
+// Longest range the planner will enumerate (keeps very large selections bounded).
+export const MAX_RANGE_DAYS = 372
+
 // Inclusive list of days from start → end (capped to avoid runaway tables).
-export function enumerateDays(start, end, cap = 92) {
+export function enumerateDays(start, end, cap = MAX_RANGE_DAYS) {
   const out = []
   let cur = startOfDay(start)
   const last = startOfDay(end)
@@ -62,4 +65,6 @@ export const PRESETS = [
   { id: 'week',   label: 'Next 7 days', days: 6 },
   { id: 'two',    label: 'Next 14 days', days: 13 },
   { id: 'month',  label: 'Next 30 days', days: 29 },
+  { id: 'sixty',  label: 'Next 60 days', days: 59 },
+  { id: 'ninety', label: 'Next 90 days', days: 89 },
 ]

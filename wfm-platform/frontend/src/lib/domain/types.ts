@@ -12,8 +12,15 @@ export interface Queue {
 export interface Agent {
   id: string
   name: string
+  // Ordered by priority: skills[0] is the agent's primary skill, skills[1]
+  // secondary, and so on.
   skills: string[]
   shift: string
+  // Links to a global ShiftPattern (see lib/domain/shiftPatterns.ts) that
+  // defines this shift's break/lunch segments. Optional so imported/legacy
+  // rosters without one still work (Scheduling falls back to a synthesised
+  // pattern derived from `shift`).
+  shiftPatternId?: string
   team: string
   tl: string
 }

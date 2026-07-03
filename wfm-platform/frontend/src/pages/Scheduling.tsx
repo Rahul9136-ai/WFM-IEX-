@@ -1,11 +1,18 @@
-import { useMemo } from "react"
+import { useMemo, useRef, useState } from "react"
+import { CalendarClock, FileDown, Upload } from "lucide-react"
+import { Link } from "react-router-dom"
 
 import { AiSummary } from "@/components/ai-summary"
+import { ExportButton } from "@/components/export-button"
 import { PageHeader } from "@/components/page-header"
+import { PermissionGate } from "@/components/permission-gate"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { buildPlan, fmtPct, summarisePlan } from "@/lib/domain/planning"
-import { INTERVALS, QUEUES } from "@/lib/domain/seed"
+import { INTERVALS } from "@/lib/domain/seed"
+import { patternMarkers, resolvePatternForAgent } from "@/lib/domain/shiftPatterns"
+import { downloadTemplate, parseScheduleFile } from "@/lib/schedule"
 import { useWfm } from "@/store/wfm"
 
 function coveredIdx(shift: string): boolean[] {
@@ -20,21 +27,31 @@ function coveredIdx(shift: string): boolean[] {
   })
 }
 
-function marker(shift: string, idx: number): "lunch" | "break" | null {
-  const [sh, sm] = shift.split("–")[0].split(":").map(Number)
-  const startM = sh * 60 + sm
-  const [h, m] = INTERVALS[idx].label.split(":").map(Number)
-  const mins = h * 60 + m
-  if (mins === startM + 240) return "lunch"
-  if (mins === startM + 120) return "break"
-  return null
-}
-
 export function Scheduling() {
-  const { queueId, forecasts, shrinkage, agents } = useWfm()
-  const queue = QUEUES.find((q) => q.id === queueId)!
+  const { queueId, forecasts, shrinkage, agents, setAgents, shiftPatterns, queues } = useWfm()
+  const queue = queues.find((q) => q.id === queueId)!
   const plan = useMemo(() => buildPlan(forecasts[queue.id], queue.aht, queue, shrinkage, agents), [forecasts, queue, shrinkage, agents])
   const sum = useMemo(() => summarisePlan(plan), [plan])
+
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const { agents: imported, errors } = await parseScheduleFile(file, queues)
+      if (!imported.length) {
+        setImportMsg({ ok: false, text: `No valid rows in ${file.name}. ${errors.slice(0, 2).join("; ")}` })
+      } else {
+        setAgents(imported, `${imported.length} agents from ${file.name}`)
+        setImportMsg({ ok: true, text: `Imported ${imported.length} agents from ${file.name}${errors.length ? ` (${errors.length} rows skipped)` : ""}.` })
+      }
+    } catch (err) {
+      setImportMsg({ ok: false, text: `Could not read ${file.name}: ${(err as Error).message}` })
+    }
+    e.target.value = ""
+  }
 
   const under = plan.filter((p) => p.variance < 0)
   const insight = {
@@ -49,7 +66,42 @@ export function Scheduling() {
 
   return (
     <>
-      <PageHeader title="Scheduling" subtitle={`Daily roster · ${agents.length} agents · 07:00–19:00`} actions={<Badge variant="secondary">skilled for {queue.name}</Badge>} />
+      <PageHeader
+        title="Scheduling"
+        subtitle={`Daily roster · ${agents.length} agents · 07:00–19:00`}
+        actions={
+          <>
+            <Badge variant="secondary" className="hidden lg:inline-flex">skilled for {queue.name}</Badge>
+            <PermissionGate module="scheduling">
+              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={onFile} />
+              <Button variant="outline" onClick={() => downloadTemplate(agents)}>
+                <FileDown className="h-4 w-4" /> Template
+              </Button>
+              <Button variant="outline" onClick={() => fileRef.current?.click()}>
+                <Upload className="h-4 w-4" /> Import schedule
+              </Button>
+            </PermissionGate>
+            <Button variant="outline" asChild>
+              <Link to="/shift-patterns"><CalendarClock className="h-4 w-4" /> Shift patterns</Link>
+            </Button>
+            <ExportButton
+              filename={`schedule-${queue.id}`}
+              sheets={() => [
+                { name: "Roster", rows: agents.map((a) => ({ Name: a.name, Team: a.team, "Team Lead": a.tl, Shift: a.shift, Skills: a.skills.map((s) => queues.find((q) => q.id === s)?.name ?? s).join(", ") })) },
+                { name: "Coverage", rows: plan.map((p) => ({ Interval: p.label, Scheduled: p.scheduled, Required: p.requiredGross, Variance: p.variance })) },
+              ]}
+            />
+          </>
+        }
+      />
+
+      {importMsg && (
+        <div className={`mb-4 rounded-lg border px-4 py-2.5 text-sm ${importMsg.ok ? "border-emerald-500/40 text-emerald-500" : "border-destructive/40 text-destructive"}`}>
+          {importMsg.ok ? "✓ " : "✕ "}
+          {importMsg.text}
+          {importMsg.ok && <span className="text-muted-foreground"> Coverage & plans updated across the app.</span>}
+        </div>
+      )}
 
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
         <AiSummary insight={insight} title="AI Scheduling Summary" />
@@ -62,6 +114,7 @@ export function Scheduling() {
             <span className="flex items-center gap-2"><i className="h-3 w-4 rounded bg-slate-500" /> on shift, other skill</span>
             <span className="flex items-center gap-2"><i className="h-3 w-4 rounded bg-amber-500" /> lunch</span>
             <span className="flex items-center gap-2"><i className="h-3 w-4 rounded bg-muted-foreground" /> break</span>
+            <span className="ml-auto text-xs">Break/lunch layout comes from each agent's <Link to="/shift-patterns" className="text-primary hover:underline">shift pattern</Link>.</span>
           </CardContent>
         </Card>
       </div>
@@ -86,6 +139,7 @@ export function Scheduling() {
                 {agents.map((a) => {
                   const cov = coveredIdx(a.shift)
                   const skilled = a.skills.includes(queue.id)
+                  const markers = patternMarkers(resolvePatternForAgent(a, shiftPatterns))
                   return (
                     <tr key={a.id} className="hover:bg-muted/30">
                       <td className="sticky left-0 bg-card px-2 py-1 font-medium">{a.name}</td>
@@ -93,7 +147,7 @@ export function Scheduling() {
                       {INTERVALS.map((_, i) => {
                         let bg = "transparent"
                         if (cov[i]) {
-                          const mk = marker(a.shift, i)
+                          const mk = markers.get(i)
                           if (mk === "lunch") bg = "#f59e0b"
                           else if (mk === "break") bg = "hsl(var(--muted-foreground))"
                           else bg = skilled ? queue.color : "#64748b"

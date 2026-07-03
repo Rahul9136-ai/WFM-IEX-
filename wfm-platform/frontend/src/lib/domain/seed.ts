@@ -76,10 +76,10 @@ const LAST = [
   "Ahmed", "Webb", "Mehta", "Dubois", "Cruz", "Holt", "Ivanov", "Frost", "Gomez",
 ]
 const ROSTER_PLAN = [
-  { shift: "07:00–15:30", n: 8, team: "Alpha" },
-  { shift: "08:00–16:30", n: 6, team: "Alpha" },
-  { shift: "09:30–18:00", n: 8, team: "Bravo" },
-  { shift: "10:30–19:00", n: 8, team: "Charlie" },
+  { shift: "07:00–15:30", patternId: "sp-early", n: 8, team: "Alpha" },
+  { shift: "08:00–16:30", patternId: "sp-midam", n: 6, team: "Alpha" },
+  { shift: "09:30–18:00", patternId: "sp-midday", n: 8, team: "Bravo" },
+  { shift: "10:30–19:00", patternId: "sp-late", n: 8, team: "Charlie" },
 ]
 const SKILL_CYCLE = [
   ["sales", "billing"], ["support", "sales"], ["billing", "support"], ["sales", "support"],
@@ -97,6 +97,7 @@ export function makeAgents(): Agent[] {
         name: `${FIRST[i]} ${LAST[i]}`,
         skills: SKILL_CYCLE[i % SKILL_CYCLE.length],
         shift: block.shift,
+        shiftPatternId: block.patternId,
         team: block.team,
         tl: TEAMS[block.team].tl,
       })

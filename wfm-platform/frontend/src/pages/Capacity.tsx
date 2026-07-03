@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 
 import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
+import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -11,15 +12,14 @@ import { Briefcase, TrendingDown, UserPlus, Users } from "lucide-react"
 import { addDays, fmtDay, parseYMD, PRESETS, TODAY, ymd } from "@/lib/domain/dates"
 import { backtestG, type GranId, GRANULARITIES, rangePlan, summariseBuckets } from "@/lib/domain/granularity"
 import { fmtPct } from "@/lib/domain/planning"
-import { QUEUES } from "@/lib/domain/seed"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
 
 const SHIFT_HRS = 8
 
 export function Capacity() {
-  const { queueId, shrinkage, setShrinkage, forecastMethod, agents } = useWfm()
-  const queue = QUEUES.find((q) => q.id === queueId)!
+  const { queueId, shrinkage, setShrinkage, forecastMethod, agents, queues } = useWfm()
+  const queue = queues.find((q) => q.id === queueId)!
 
   const [gran, setGran] = useState<GranId>("weekly")
   const [start, setStart] = useState(ymd(TODAY))
@@ -62,13 +62,29 @@ export function Capacity() {
         title="Capacity Planning"
         subtitle={`${queue.name} · FTE · shrinkage · occupancy`}
         actions={
-          <div className="inline-flex rounded-lg bg-muted p-1">
-            {GRANULARITIES.map((g) => (
-              <button key={g.id} onClick={() => setGran(g.id)} className={cn("rounded-md px-3 py-1 text-sm font-medium", gran === g.id ? "bg-background shadow-sm" : "text-muted-foreground")}>
-                {g.name}
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="inline-flex rounded-lg bg-muted p-1">
+              {GRANULARITIES.map((g) => (
+                <button key={g.id} onClick={() => setGran(g.id)} className={cn("rounded-md px-3 py-1 text-sm font-medium", gran === g.id ? "bg-background shadow-sm" : "text-muted-foreground")}>
+                  {g.name}
+                </button>
+              ))}
+            </div>
+            <ExportButton
+              filename={`capacity-${queue.id}-${gran}`}
+              sheets={() => [
+                { name: "KPIs", rows: [
+                  { Metric: "Required agent-hrs", Value: reqHrs },
+                  { Metric: "Scheduled agent-hrs", Value: schedHrs },
+                  { Metric: "Gap (hrs)", Value: gap },
+                  { Metric: "Avg FTE / bucket", Value: reqFte.toFixed(1) },
+                  { Metric: "Hiring need (FTE)", Value: hireNeed },
+                  { Metric: "Shrinkage", Value: fmtPct(shrinkage) },
+                ] },
+                { name: "Capacity", rows: cap.rows.map((r) => ({ [cap.bucket]: r.label, Volume: r.volume, Required: r.required, Scheduled: r.scheduled, Variance: r.variance, "Proj. SL": fmtPct(r.projSL) })) },
+              ]}
+            />
+          </>
         }
       />
 

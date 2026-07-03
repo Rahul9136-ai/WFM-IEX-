@@ -4,7 +4,7 @@ import { historyFor, HISTORY_DAYS } from '../data/history.js'
 import { INTERVALS } from '../data/seed.js'
 import { METHODS, methodById, mape } from './forecast.js'
 import { buildPlan, summarisePlan } from './planning.js'
-import { enumerateDays, dowOf, dayIndex, dayOfYear, fmtDay, fmtShort, weekKey, weekLabel, monthKey, monthLabel } from './dates.js'
+import { enumerateDays, dowOf, dayIndex, dayOfYear, fmtDay, fmtShort, weekKey, weekLabel, monthKey, monthLabel, MAX_RANGE_DAYS } from './dates.js'
 
 export const GRANULARITIES = [
   { id: 'daily',   name: 'Daily',   sub: 'one day · 30-min intervals' },
@@ -96,7 +96,7 @@ export function rangePlan(queueId, start, end, gran, methodId, aht, queue, shrin
   }))
 
   const bucket = gran === 'monthly' ? 'month' : gran === 'weekly' ? 'week' : 'day'
-  return { rows, unit: 'agent-hrs', bucket, nDays: dates.length, truncated: dates.length >= 92 }
+  return { rows, unit: 'agent-hrs', bucket, nDays: dates.length, truncated: dates.length >= MAX_RANGE_DAYS }
 }
 
 // Summary numbers for a bucketed plan (used by AI insight + headline stats).

@@ -30,7 +30,10 @@ export function dayOfYear(d: Date): number {
   return Math.floor((startOfDay(d).getTime() - yearStart.getTime()) / DAY_MS)
 }
 
-export function enumerateDays(start: Date, end: Date, cap = 92): Date[] {
+// Longest range the planner will enumerate (keeps very large selections bounded).
+export const MAX_RANGE_DAYS = 372
+
+export function enumerateDays(start: Date, end: Date, cap = MAX_RANGE_DAYS): Date[] {
   const out: Date[] = []
   let cur = startOfDay(start)
   const last = startOfDay(end)
@@ -41,8 +44,11 @@ export function enumerateDays(start: Date, end: Date, cap = 92): Date[] {
   return out
 }
 
-export function dayIndex(date: Date, historyDays: number): number {
-  return historyDays - 1 + daysBetween(addDays(TODAY, -1), date)
+// `anchorDate` is the calendar date of the last entry in the training series
+// (normally TODAY-1, but shifts forward once imported actuals extend history
+// beyond that). Index `historyDays-1` always corresponds to `anchorDate`.
+export function dayIndex(date: Date, historyDays: number, anchorDate: Date = addDays(TODAY, -1)): number {
+  return historyDays - 1 + daysBetween(anchorDate, date)
 }
 
 export const fmtDay = (d: Date) => `${DOW3[d.getDay()]} ${d.getDate()} ${MON[d.getMonth()]}`
@@ -63,4 +69,6 @@ export const PRESETS = [
   { id: "week", label: "Next 7 days", days: 6 },
   { id: "two", label: "Next 14 days", days: 13 },
   { id: "month", label: "Next 30 days", days: 29 },
+  { id: "sixty", label: "Next 60 days", days: 59 },
+  { id: "ninety", label: "Next 90 days", days: 89 },
 ]

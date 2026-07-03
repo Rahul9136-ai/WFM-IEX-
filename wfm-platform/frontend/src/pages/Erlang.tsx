@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 
+import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
@@ -49,7 +50,29 @@ export function Erlang() {
 
   return (
     <>
-      <PageHeader title="Erlang C Staffing Calculator" subtitle="Single-interval staffing model · 30-minute interval" />
+      <PageHeader
+        title="Erlang C Staffing Calculator"
+        subtitle="Single-interval staffing model · 30-minute interval"
+        actions={
+          <ExportButton
+            filename="erlang-staffing"
+            sheets={() => [
+              { name: "Inputs & Result", rows: [
+                { Metric: "Contacts / interval", Value: volume },
+                { Metric: "AHT (s)", Value: aht },
+                { Metric: "SL target", Value: `${slTarget}%` },
+                { Metric: "Target time (s)", Value: targetTime },
+                { Metric: "Shrinkage", Value: fmtPct(shrinkage) },
+                { Metric: "Offered load (Erlangs)", Value: intensity.toFixed(2) },
+                { Metric: "Required (net)", Value: reqNet },
+                { Metric: "Required (rostered)", Value: reqGross },
+                { Metric: "Achieved SL", Value: fmtPct(serviceLevel(reqNet, intensity, aht, targetTime)) },
+              ] },
+              { name: "Sensitivity", rows: band.map((r) => ({ Agents: r.agents, "Service Level": fmtPct(r.sl), ASA: fmtSec(r.asa), Occupancy: fmtPct(r.occ), "Meets target": r.meets ? "Yes" : "No" })) },
+            ]}
+          />
+        }
+      />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="glass">

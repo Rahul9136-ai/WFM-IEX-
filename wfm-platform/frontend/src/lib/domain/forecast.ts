@@ -1,8 +1,8 @@
 // Forecasting engine — statistical + ML methods, back-tested with MAPE.
 // Trains on ~3 years of history (see history.ts). The ML models use intraday,
 // weekly AND annual (day-of-year) seasonality features so the long history pays off.
-import { dayOfYear, TODAY } from "./dates"
-import { HISTORY_DAYS, historyFor } from "./history"
+import { addDays, dayOfYear, dowOf } from "./dates"
+import { type ActualRow, historyFor } from "./history"
 import type { ForecastMethod, MethodResult } from "./types"
 
 const M = 24
@@ -94,7 +94,7 @@ function linearRegression(
   let w = lrCache.get(days)
   if (!w) {
     // day-level feature segment (dow + doy + trend) — allocate per day, not per row
-    const DP = days.map((_, d) => [...dowFeatures(dows[d]), ...doyFeatures(dy[d]), d / HISTORY_DAYS])
+    const DP = days.map((_, d) => [...dowFeatures(dows[d]), ...doyFeatures(dy[d]), d / days.length])
     const XtX = Array.from({ length: P }, () => new Array(P).fill(0))
     const Xty = new Array(P).fill(0)
     const row = new Array(P)
@@ -120,7 +120,7 @@ function linearRegression(
     w = gaussianSolve(XtX, Xty)
     lrCache.set(days, w)
   }
-  const dn = targetDayIdx / HISTORY_DAYS
+  const dn = targetDayIdx / days.length
   const td = dowFeatures(targetDow)
   const ty = doyFeatures(tDoy)
   return Array.from({ length: M }, (_, i) => {
@@ -146,12 +146,12 @@ function knn(
   if (cand.length < K) cand = days.map((_, d) => d)
 
   const q = doyFeatures(tDoy)
-  const qt = targetDayIdx / HISTORY_DAYS
+  const qt = targetDayIdx / days.length
   const best: { d: number; dist: number }[] = []
   let worst = Infinity
   for (const d of cand) {
     const f = doyFeatures(dy[d])
-    let dist = (d / HISTORY_DAYS - qt) ** 2 * 0.6
+    let dist = (d / days.length - qt) ** 2 * 0.6
     for (let k = 0; k < 4; k++) dist += (f[k] - q[k]) ** 2
     if (best.length < K) {
       best.push({ d, dist })
@@ -166,10 +166,89 @@ function knn(
   return Array.from({ length: M }, (_, i) => Math.round(best.reduce((a, b) => a + days[b.d][i], 0) / best.length))
 }
 
+// ---------- SARIMA (approx) ----------
+// Seasonal ARIMA on the weekly-seasonal sub-series: for each interval we take the
+// same-weekday history and fit ARIMA(1,1,0) — first difference + AR(1) — so trend
+// and short-term autocorrelation carry into the forecast. (Weekly seasonality is
+// handled by the same-weekday subsetting; a TS stand-in for statsmodels SARIMAX.)
+function sarima(days: number[][], dows: number[], targetDow: number): number[] {
+  const idx: number[] = []
+  for (let d = 0; d < days.length; d++) if (dows[d] === targetDow) idx.push(d)
+  const src = idx.length >= 4 ? idx : days.map((_, d) => d)
+  return Array.from({ length: M }, (_, i) => {
+    const v = src.map((d) => days[d][i])
+    const k = v.length
+    if (k < 3) return v[k - 1] ?? 0
+    const diff: number[] = []
+    for (let t = 1; t < k; t++) diff.push(v[t] - v[t - 1])
+    const mean = diff.reduce((a, b) => a + b, 0) / diff.length
+    let num = 0, den = 0
+    for (let t = 1; t < diff.length; t++) {
+      num += (diff[t] - mean) * (diff[t - 1] - mean)
+      den += (diff[t - 1] - mean) ** 2
+    }
+    const phi = den ? Math.max(-0.9, Math.min(0.9, num / den)) : 0
+    const dHat = mean + phi * (diff[diff.length - 1] - mean)
+    return Math.max(0, Math.round(v[k - 1] + dHat))
+  })
+}
+
+// ---------- Prophet (approx) ----------
+// Additive/decomposition model like Prophet: piecewise level + linear trend on
+// daily totals × weekly factor × yearly (day-of-year bucket) factor, distributed
+// across the day by the average intraday shape. Cached per training set.
+interface ProphetFit {
+  intercept: number
+  slope: number
+  weekly: number[] // by weekday
+  yearly: number[] // by ~monthly doy bucket (12)
+  shape: number[] // normalised intraday profile (sums to 1)
+}
+const prophetCache = new WeakMap<number[][], ProphetFit>()
+const doyBucket = (doy: number) => Math.min(11, Math.floor((doy - 1) / 30.5))
+
+function prophet(
+  days: number[][], dows: number[], targetDow: number, targetDayIdx: number,
+  doys?: number[], targetDoy?: number,
+): number[] {
+  const dy = doys ?? days.map(() => 1)
+  let fit = prophetCache.get(days)
+  if (!fit) {
+    const totals = days.map((day) => day.reduce((a, b) => a + b, 0))
+    const overall = totals.reduce((a, b) => a + b, 0) / totals.length || 1
+    // OLS linear trend on day index
+    let sx = 0, sy = 0, sxx = 0, sxy = 0
+    totals.forEach((y, x) => { sx += x; sy += y; sxx += x * x; sxy += x * y })
+    const n = totals.length
+    const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx || 1)
+    const intercept = (sy - slope * sx) / n
+    // weekly + yearly multiplicative factors (ratio to overall mean)
+    const wSum = new Array(7).fill(0), wCnt = new Array(7).fill(0)
+    const ySum = new Array(12).fill(0), yCnt = new Array(12).fill(0)
+    const shapeAcc = new Array(M).fill(0)
+    let shapeDays = 0
+    totals.forEach((tot, d) => {
+      wSum[dows[d]] += tot; wCnt[dows[d]]++
+      const b = doyBucket(dy[d]); ySum[b] += tot; yCnt[b]++
+      if (tot > 0) { for (let i = 0; i < M; i++) shapeAcc[i] += days[d][i] / tot; shapeDays++ }
+    })
+    const weekly = wSum.map((s, k) => (wCnt[k] ? s / wCnt[k] / overall : 1))
+    const yearly = ySum.map((s, k) => (yCnt[k] ? s / yCnt[k] / overall : 1))
+    const shape = shapeAcc.map((s) => (shapeDays ? s / shapeDays : 1 / M))
+    fit = { intercept, slope, weekly, yearly, shape }
+    prophetCache.set(days, fit)
+  }
+  const baseTrend = fit.intercept + fit.slope * (targetDayIdx ?? days.length)
+  const dayTotal = Math.max(0, baseTrend) * (fit.weekly[targetDow] ?? 1) * (fit.yearly[doyBucket(targetDoy ?? 1)] ?? 1)
+  return fit.shape.map((s) => Math.max(0, Math.round(dayTotal * s)))
+}
+
 export const METHODS: ForecastMethod[] = [
   { id: "snaive", name: "Seasonal Naïve", kind: "Statistical", fn: seasonalNaive },
   { id: "movavg", name: "Moving Average", kind: "Statistical", fn: movingAverage },
   { id: "holt", name: "Holt-Winters", kind: "Statistical", fn: holtWinters },
+  { id: "sarima", name: "SARIMA", kind: "Statistical", fn: sarima },
+  { id: "prophet", name: "Prophet", kind: "ML", fn: prophet },
   { id: "linreg", name: "Linear Regression", kind: "ML", fn: linearRegression },
   { id: "knn", name: "k-NN Regression", kind: "ML", fn: knn },
 ]
@@ -193,8 +272,8 @@ export interface Backtest {
   holdoutDow: number
 }
 
-export function backtest(queueId: string): Backtest {
-  const { days, dows, doys } = historyFor(queueId)
+export function backtest(queueId: string, overlay?: ActualRow[]): Backtest {
+  const { days, dows, doys } = historyFor(queueId, overlay)
   const L = days.length - 1
   const train = days.slice(0, L)
   const trainDows = dows.slice(0, L)
@@ -208,9 +287,12 @@ export function backtest(queueId: string): Backtest {
   return { perMethod, best, holdout, holdoutDow: dows[L] }
 }
 
-export function generate(queueId: string, methodId: string): number[] {
-  const { days, dows, doys } = historyFor(queueId)
+// Forecasts the day after the training series' last known date — normally
+// TODAY (base history ends TODAY-1), but shifts forward once imported actuals
+// extend the series past that.
+export function generate(queueId: string, methodId: string, overlay?: ActualRow[]): number[] {
+  const { days, dows, doys, lastDate } = historyFor(queueId, overlay)
   const m = methodById[methodId] ?? METHODS[0]
-  const targetDow = (dows[dows.length - 1] + 1) % 7
-  return m.fn(days, dows, targetDow, HISTORY_DAYS, doys, dayOfYear(TODAY))
+  const targetDate = addDays(lastDate, 1)
+  return m.fn(days, dows, dowOf(targetDate), days.length, doys, dayOfYear(targetDate))
 }

@@ -1,17 +1,18 @@
 import { useMemo } from "react"
 
 import { SeriesChart } from "@/components/charts/series-chart"
+import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Gauge, LineChart, Target, Timer } from "lucide-react"
 import { fmtPct } from "@/lib/domain/planning"
-import { actualsFor, INTERVALS, QUEUES } from "@/lib/domain/seed"
+import { actualsFor, INTERVALS } from "@/lib/domain/seed"
 import { useWfm } from "@/store/wfm"
 
 export function Intraday() {
-  const { queueId, forecasts, nowIdx, setNowIdx } = useWfm()
-  const queue = QUEUES.find((q) => q.id === queueId)!
+  const { queueId, forecasts, nowIdx, setNowIdx, queues } = useWfm()
+  const queue = queues.find((q) => q.id === queueId)!
   const volume = forecasts[queue.id]
   const actuals = useMemo(() => actualsFor(queue.id, nowIdx), [queue.id, nowIdx])
 
@@ -38,7 +39,24 @@ export function Intraday() {
 
   return (
     <>
-      <PageHeader title="Intraday Management" subtitle={`${queue.name} · live tracking & reforecast · now ${INTERVALS[nowIdx].label}`} />
+      <PageHeader
+        title="Intraday Management"
+        subtitle={`${queue.name} · live tracking & reforecast · now ${INTERVALS[nowIdx].label}`}
+        actions={
+          <ExportButton
+            filename={`intraday-${queue.id}`}
+            sheets={() => [
+              { name: "KPIs", rows: [
+                { Metric: "Pacing vs forecast", Value: fmtPct(pacing - 1) },
+                { Metric: "Original forecast", Value: dayForecast },
+                { Metric: "Reforecast", Value: dayReforecast },
+                { Metric: "Now interval", Value: INTERVALS[nowIdx].label },
+              ] },
+              { name: "Intraday", rows: data.map((d) => ({ Interval: d.label, Forecast: d.Forecast, Actual: d.Actual, Reforecast: d.Reforecast })) },
+            ]}
+          />
+        }
+      />
 
       <Card className="glass mb-4">
         <CardContent className="pt-5">

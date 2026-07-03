@@ -1,10 +1,18 @@
-// Synthetic historical interval data the forecasting models train on.
+// Synthetic historical interval data the forecasting models train on, with
+// support for real imported actuals layered on top.
 //
 // ~3 years (1,110 days) per queue so the models have real long-range structure to
 // learn: multi-year trend + annual (day-of-year) seasonality + weekly seasonality
 // + intraday shape + a holiday dip + noise. Deterministic (seeded) and memoised so
 // the large series is generated only once per queue.
-import { addDays, dayOfYear, dowOf, TODAY } from "./dates"
+//
+// Imported actuals (see lib/actuals.ts) are daily-total rows keyed by ISO date.
+// They are merged on top of the synthetic base: a date that already exists is
+// overwritten with the real number (ground truth beats the synthetic estimate);
+// a date beyond the current last entry is appended, extending the training
+// window — and the "last known day" (the anchor forward forecasts start from)
+// moves forward to match.
+import { addDays, dayOfYear, daysBetween, dowOf, TODAY, ymd } from "./dates"
 import { PEAKS, SHAPE } from "./seed"
 
 function mulberry32(seed: number) {
@@ -25,7 +33,8 @@ const ANNUAL_AMP = 0.13 // seasonal swing amplitude
 const ANNUAL_PEAK_DOY = 320 // peak demand mid-November (pre-holiday)
 const TWO_PI = Math.PI * 2
 
-export const HISTORY_DAYS = 1110 // ~3 years + a margin
+export const HISTORY_DAYS = 1110 // ~3 years + a margin (synthetic base length)
+const SUM_SHAPE = SHAPE.reduce((a, b) => a + b, 0)
 
 // Annual seasonality multiplier for a given day-of-year (peaks in Q4, dips ~July).
 function annualFactor(doy: number): number {
@@ -39,16 +48,29 @@ function holidayFactor(doy: number): number {
   return 1
 }
 
-export interface History {
-  days: number[][] // [day][interval] contact volume
-  dows: number[] // weekday per day
-  doys: number[] // day-of-year per day
+// One imported actual: a real daily-total contact volume for a calendar date.
+export interface ActualRow {
+  date: string // ISO yyyy-mm-dd
+  volume: number
 }
 
-const cache = new Map<string, History>()
+export interface History {
+  days: number[][] // [day][interval] contact volume, chronological
+  dows: number[] // weekday per day
+  doys: number[] // day-of-year per day
+  dateKeys: string[] // ISO date per day, aligned with days/dows/doys
+  lastDate: Date // calendar date of the final entry — the forward-forecast anchor
+}
 
-export function historyFor(queueId: string): History {
-  const hit = cache.get(queueId)
+// Spread a real daily total across the day using the standard intraday shape.
+export function distributeDaily(volume: number): number[] {
+  return SHAPE.map((s) => Math.max(0, Math.round((volume * s) / SUM_SHAPE)))
+}
+
+const baseCache = new Map<string, History>()
+
+function baseHistoryFor(queueId: string): History {
+  const hit = baseCache.get(queueId)
   if (hit) return hit
 
   const peak = PEAKS[queueId] ?? 40
@@ -56,6 +78,7 @@ export function historyFor(queueId: string): History {
   const days: number[][] = []
   const dows: number[] = []
   const doys: number[] = []
+  const dateKeys: string[] = []
 
   for (let d = 0; d < HISTORY_DAYS; d++) {
     // day d's calendar date — the last entry (d = HISTORY_DAYS-1) is TODAY-1.
@@ -71,9 +94,53 @@ export function historyFor(queueId: string): History {
     days.push(day)
     dows.push(dow)
     doys.push(doy)
+    dateKeys.push(ymd(date))
   }
 
-  const result = { days, dows, doys }
-  cache.set(queueId, result)
+  const result: History = { days, dows, doys, dateKeys, lastDate: addDays(TODAY, -1) }
+  baseCache.set(queueId, result)
   return result
+}
+
+// Merge cache keyed by queueId → last overlay array *reference* seen. Zustand
+// keeps the persisted overlay array stable until it actually changes, so a
+// simple reference check avoids re-merging (and re-fitting downstream models)
+// on every render.
+const mergedCache = new Map<string, { overlayRef: ActualRow[]; result: History }>()
+
+export function historyFor(queueId: string, overlay?: ActualRow[]): History {
+  const base = baseHistoryFor(queueId)
+  if (!overlay || overlay.length === 0) return base
+
+  const hit = mergedCache.get(queueId)
+  if (hit && hit.overlayRef === overlay) return hit.result
+
+  const map = new Map<string, number[]>()
+  base.dateKeys.forEach((k, i) => map.set(k, base.days[i]))
+  for (const row of overlay) map.set(row.date, distributeDaily(row.volume))
+
+  const dateKeys = [...map.keys()].sort() // ISO strings sort chronologically
+  const days = dateKeys.map((k) => map.get(k)!)
+  const dows: number[] = []
+  const doys: number[] = []
+  let lastDate = base.lastDate
+  dateKeys.forEach((k) => {
+    const [y, m, d] = k.split("-").map(Number)
+    const date = new Date(y, m - 1, d)
+    dows.push(dowOf(date))
+    doys.push(dayOfYear(date))
+    if (date > lastDate) lastDate = date
+  })
+
+  const result: History = { days, dows, doys, dateKeys, lastDate }
+  mergedCache.set(queueId, { overlayRef: overlay, result })
+  return result
+}
+
+// How many *new* calendar days an overlay adds beyond the synthetic base's
+// last day (TODAY-1) — i.e. how far the training window has been extended.
+export function daysAppendedBeyondBase(queueId: string, overlay?: ActualRow[]): number {
+  if (!overlay || overlay.length === 0) return 0
+  const base = baseHistoryFor(queueId)
+  return Math.max(0, daysBetween(base.lastDate, historyFor(queueId, overlay).lastDate))
 }

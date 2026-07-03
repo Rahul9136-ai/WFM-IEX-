@@ -77,7 +77,28 @@ export function RampPlanner() {
           Ramp-Up / Ramp-Down Planner
           <Badge variant="secondary">new business / LOB</Badge>
         </CardTitle>
-        <span className="text-xs text-muted-foreground">{q.name} economics · 5 days/wk · 40h FTE</span>
+        <div className="inline-flex rounded-lg bg-muted p-1" role="group" aria-label="Ramp direction">
+          <button
+            onClick={() => setDirection("up")}
+            aria-pressed={direction === "up"}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-3 py-1 text-sm font-semibold transition-colors",
+              direction === "up" ? "bg-background text-emerald-500 shadow-sm" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <TrendingUp className="h-4 w-4" /> Ramp Up
+          </button>
+          <button
+            onClick={() => setDirection("down")}
+            aria-pressed={direction === "down"}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-3 py-1 text-sm font-semibold transition-colors",
+              direction === "down" ? "bg-background text-amber-500 shadow-sm" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <TrendingDown className="h-4 w-4" /> Ramp Down
+          </button>
+        </div>
       </CardHeader>
       <CardContent>
         {/* Inputs */}
@@ -87,17 +108,6 @@ export function RampPlanner() {
               <Input value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
           </div>
-          <Field label="Direction">
-            <Select
-              value={direction}
-              onChange={(e) => setDirection(e.target.value as RampDirection)}
-              options={[
-                { value: "up", label: "Ramp up (new business)" },
-                { value: "down", label: "Ramp down (offboarding)" },
-              ]}
-              className="w-full"
-            />
-          </Field>
           <Field label="Curve">
             <Select
               value={shape}

@@ -1,35 +1,50 @@
-import { Check, ShieldCheck } from "lucide-react"
+import { ShieldCheck } from "lucide-react"
 
+import { PermissionGate } from "@/components/permission-gate"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { type AccessLevel, MODULES, ROLE_DESCRIPTIONS, ROLES } from "@/lib/domain/roles"
+import { cn } from "@/lib/utils"
+import { useWfm } from "@/store/wfm"
 
 const USERS = [
-  { name: "Avery Owens", email: "avery.owens@flowforce.io", role: "Administrator", status: "Active" },
+  { name: "Avery Owens", email: "avery.owens@flowforce.io", role: "Super Admin", status: "Active" },
   { name: "Priya Nair", email: "priya.nair@flowforce.io", role: "Planner", status: "Active" },
-  { name: "Marcus Webb", email: "marcus.webb@flowforce.io", role: "Team Lead", status: "Active" },
-  { name: "Sam Okoye", email: "sam.okoye@flowforce.io", role: "Team Lead", status: "Active" },
-  { name: "Dana Fields", email: "dana.fields@flowforce.io", role: "Viewer", status: "Invited" },
+  { name: "Marcus Webb", email: "marcus.webb@flowforce.io", role: "Team Leader", status: "Active" },
+  { name: "Sam Okoye", email: "sam.okoye@flowforce.io", role: "RTA", status: "Active" },
+  { name: "Elena Faro", email: "elena.faro@flowforce.io", role: "WFM Manager", status: "Active" },
+  { name: "Dana Fields", email: "dana.fields@flowforce.io", role: "Read-Only Viewer", status: "Invited" },
 ]
 
-const ROLES = ["Administrator", "Planner", "Team Lead", "Viewer"]
-const PERMS = ["Forecasts", "Schedules", "Real-Time", "Employees", "Reports", "Settings"]
-const MATRIX: Record<string, boolean[]> = {
-  Administrator: [true, true, true, true, true, true],
-  Planner: [true, true, true, false, true, false],
-  "Team Lead": [false, true, true, true, true, false],
-  Viewer: [false, false, true, false, true, false],
+const NEXT: Record<AccessLevel, AccessLevel> = { none: "view", view: "edit", edit: "none" }
+const CELL_STYLE: Record<AccessLevel, string> = {
+  none: "text-muted-foreground/30",
+  view: "bg-primary/10 text-primary",
+  edit: "bg-emerald-500/15 text-emerald-500",
 }
+const CELL_LABEL: Record<AccessLevel, string> = { none: "—", view: "View", edit: "Edit" }
 
 export function Settings() {
+  const { permissions, setPermission, can } = useWfm()
+  const editable = can("settings", "edit")
+
   return (
     <>
-      <PageHeader title="Settings & RBAC" subtitle="Users · roles · permissions · organisation" actions={<Button><ShieldCheck className="h-4 w-4" /> Invite user</Button>} />
+      <PageHeader
+        title="Settings & RBAC"
+        subtitle="Users · designation-level access · organisation"
+        actions={
+          <PermissionGate module="settings">
+            <Button><ShieldCheck className="h-4 w-4" /> Invite user</Button>
+          </PermissionGate>
+        }
+      />
 
-      <Tabs defaultValue="users">
+      <Tabs defaultValue="roles">
         <TabsList>
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="roles">Roles & Permissions</TabsTrigger>
@@ -43,7 +58,7 @@ export function Settings() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>User</TableHead>
-                    <TableHead>Role</TableHead>
+                    <TableHead>Designation</TableHead>
                     <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -67,33 +82,64 @@ export function Settings() {
         </TabsContent>
 
         <TabsContent value="roles">
+          <Card className="glass mb-4">
+            <CardContent className="grid gap-x-6 gap-y-2 pt-5 sm:grid-cols-2 lg:grid-cols-3">
+              {ROLES.map((r) => (
+                <div key={r} className="text-xs">
+                  <span className="font-semibold text-foreground">{r}</span>
+                  <span className="text-muted-foreground"> — {ROLE_DESCRIPTIONS[r]}</span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
           <Card className="glass">
-            <CardHeader>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
               <CardTitle>Permission matrix</CardTitle>
+              {!editable && <Badge variant="secondary">read-only for your designation</Badge>}
             </CardHeader>
             <CardContent>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-muted-foreground">
-                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase">Role</th>
-                    {PERMS.map((p) => (
-                      <th key={p} className="px-3 py-2 text-center text-xs font-semibold uppercase">{p}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {ROLES.map((role) => (
-                    <tr key={role} className="border-b hover:bg-muted/30">
-                      <td className="px-3 py-2 font-medium">{role}</td>
-                      {MATRIX[role].map((allowed, i) => (
-                        <td key={i} className="px-3 py-2 text-center">
-                          {allowed ? <Check className="mx-auto h-4 w-4 text-emerald-500" /> : <span className="text-muted-foreground/30">—</span>}
-                        </td>
+              <p className="mb-3 text-sm text-muted-foreground">
+                {editable ? "Click a cell to cycle none → view → edit." : "Switch to a designation with Settings edit access to change this matrix."}
+              </p>
+              <div className="overflow-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-muted-foreground">
+                      <th className="sticky left-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase">Designation</th>
+                      {MODULES.map((m) => (
+                        <th key={m.id} className="whitespace-nowrap px-2 py-2 text-center text-[10px] font-semibold uppercase">{m.label}</th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {ROLES.map((role) => (
+                      <tr key={role} className="border-b hover:bg-muted/30">
+                        <td className="sticky left-0 z-10 bg-card px-3 py-1.5 font-medium">{role}</td>
+                        {MODULES.map((m) => {
+                          const level = permissions[role]?.[m.id] ?? "none"
+                          return (
+                            <td key={m.id} className="p-1 text-center">
+                              <button
+                                type="button"
+                                disabled={!editable}
+                                onClick={() => setPermission(role, m.id, NEXT[level])}
+                                className={cn(
+                                  "w-14 rounded-md px-1.5 py-1 text-[10px] font-semibold transition-colors",
+                                  CELL_STYLE[level],
+                                  editable ? "hover:brightness-125" : "cursor-default",
+                                )}
+                              >
+                                {CELL_LABEL[level]}
+                              </button>
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

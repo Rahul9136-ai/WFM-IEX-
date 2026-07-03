@@ -3,10 +3,19 @@ import { NavLink } from "react-router-dom"
 
 import { QueuePicker } from "@/components/layout/queue-picker"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { Select } from "@/components/ui/select"
 import { NAV } from "@/config/nav"
+import type { ModuleId } from "@/lib/domain/roles"
+import { ROLES } from "@/lib/domain/roles"
 import { cn } from "@/lib/utils"
+import { useWfm } from "@/store/wfm"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const permissions = useWfm((s) => s.permissions)
+  const currentRole = useWfm((s) => s.currentRole)
+  const setCurrentRole = useWfm((s) => s.setCurrentRole)
+  const visible = (moduleId: ModuleId) => (permissions[currentRole]?.[moduleId] ?? "none") !== "none"
+
   return (
     <div className="flex min-h-screen bg-background">
       {/* Sidebar */}
@@ -23,31 +32,35 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
         <nav className="flex-1 overflow-y-auto p-3">
-          {NAV.map((g) => (
-            <div key={g.group} className="mb-3">
-              <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                {g.group}
-              </p>
-              {g.items.map((it) => (
-                <NavLink
-                  key={it.to}
-                  to={it.to}
-                  end={it.to === "/"}
-                  className={({ isActive }) =>
-                    cn(
-                      "mb-0.5 flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                      isActive
-                        ? "bg-primary/15 text-primary"
-                        : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                    )
-                  }
-                >
-                  <it.icon className="h-4 w-4" />
-                  {it.label}
-                </NavLink>
-              ))}
-            </div>
-          ))}
+          {NAV.map((g) => {
+            const items = g.items.filter((it) => visible(it.module))
+            if (items.length === 0) return null
+            return (
+              <div key={g.group} className="mb-3">
+                <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                  {g.group}
+                </p>
+                {items.map((it) => (
+                  <NavLink
+                    key={it.to}
+                    to={it.to}
+                    end={it.to === "/"}
+                    className={({ isActive }) =>
+                      cn(
+                        "mb-0.5 flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                        isActive
+                          ? "bg-primary/15 text-primary"
+                          : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                      )
+                    }
+                  >
+                    <it.icon className="h-4 w-4" />
+                    {it.label}
+                  </NavLink>
+                ))}
+              </div>
+            )
+          })}
         </nav>
         <div className="border-t p-4 text-[11px] text-muted-foreground">
           v0.1 · Erlang-C engine
@@ -68,6 +81,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div className="flex-1" />
           <QueuePicker />
+          <div className="hidden lg:block" title="Simulate a designation — controls what you can see and do">
+            <Select
+              value={currentRole}
+              onChange={(e) => setCurrentRole(e.target.value as typeof currentRole)}
+              options={ROLES.map((r) => ({ value: r, label: r }))}
+              className="h-8 text-[11px]"
+            />
+          </div>
           <button className="relative grid h-9 w-9 place-items-center rounded-md hover:bg-accent" aria-label="Notifications">
             <Bell className="h-4 w-4" />
             <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-destructive" />

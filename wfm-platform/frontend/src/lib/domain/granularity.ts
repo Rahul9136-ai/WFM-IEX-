@@ -1,7 +1,7 @@
 // Granularity + date-range rollups over the day-level engine.
-import { dayIndex, dayOfYear, dowOf, enumerateDays, fmtDay, monthKey, monthLabel, weekKey, weekLabel } from "./dates"
+import { dayIndex, dayOfYear, dowOf, enumerateDays, fmtDay, MAX_RANGE_DAYS, monthKey, monthLabel, weekKey, weekLabel } from "./dates"
 import { METHODS, mape, methodById } from "./forecast"
-import { HISTORY_DAYS, historyFor } from "./history"
+import { type ActualRow, historyFor } from "./history"
 import { buildPlan, summarisePlan } from "./planning"
 import { INTERVALS } from "./seed"
 import type { Agent, BucketRow, MethodResult, Queue } from "./types"
@@ -29,8 +29,8 @@ export interface BacktestG {
   holdoutDow?: number
 }
 
-export function backtestG(queueId: string, gran: GranId): BacktestG {
-  const { days, dows, doys } = historyFor(queueId)
+export function backtestG(queueId: string, gran: GranId, overlay?: ActualRow[]): BacktestG {
+  const { days, dows, doys } = historyFor(queueId, overlay)
 
   if (gran === "daily") {
     const L = days.length - 1
@@ -65,10 +65,10 @@ export function backtestG(queueId: string, gran: GranId): BacktestG {
   return { perMethod, best, actual, labels, unit: "contacts / day" }
 }
 
-export function dayProfile(queueId: string, date: Date, methodId: string): number[] {
-  const { days, dows, doys } = historyFor(queueId)
+export function dayProfile(queueId: string, date: Date, methodId: string, overlay?: ActualRow[]): number[] {
+  const { days, dows, doys, lastDate } = historyFor(queueId, overlay)
   const m = methodById[methodId] ?? METHODS[0]
-  return m.fn(days, dows, dowOf(date), dayIndex(date, HISTORY_DAYS), doys, dayOfYear(date))
+  return m.fn(days, dows, dowOf(date), dayIndex(date, days.length, lastDate), doys, dayOfYear(date))
 }
 
 export interface RangePlan {
@@ -89,13 +89,14 @@ export function rangePlan(
   queue: Queue,
   shrinkage: number,
   agents: Agent[],
+  overlay?: ActualRow[],
 ): RangePlan {
   const dates = enumerateDays(start, end)
-  const { days, dows, doys } = historyFor(queueId)
+  const { days, dows, doys, lastDate } = historyFor(queueId, overlay)
   const m = methodById[methodId] ?? METHODS[0]
 
   const perDay = dates.map((date) => {
-    const profile = m.fn(days, dows, dowOf(date), dayIndex(date, HISTORY_DAYS), doys, dayOfYear(date))
+    const profile = m.fn(days, dows, dowOf(date), dayIndex(date, days.length, lastDate), doys, dayOfYear(date))
     const s = summarisePlan(buildPlan(profile, aht, queue, shrinkage, agents))
     return { date, volume: s.totalVol, reqH: s.reqHours, schedH: s.schedHours, wSL: s.wSL }
   })
@@ -123,7 +124,7 @@ export function rangePlan(
   }))
 
   const bucket = gran === "monthly" ? "month" : gran === "weekly" ? "week" : "day"
-  return { rows, unit: "agent-hrs", bucket, nDays: dates.length, truncated: dates.length >= 92 }
+  return { rows, unit: "agent-hrs", bucket, nDays: dates.length, truncated: dates.length >= MAX_RANGE_DAYS }
 }
 
 export interface BucketSummary {

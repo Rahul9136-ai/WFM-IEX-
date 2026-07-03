@@ -7,7 +7,6 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { backtest } from "@/lib/domain/forecast"
 import { buildPlan, fmtPct, summarisePlan } from "@/lib/domain/planning"
-import { QUEUES } from "@/lib/domain/seed"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
 
@@ -24,7 +23,7 @@ const SUGGESTIONS = [
 ]
 
 export function Copilot() {
-  const { forecasts, shrinkage, agents } = useWfm()
+  const { forecasts, shrinkage, agents, queues } = useWfm()
   const [msgs, setMsgs] = useState<Msg[]>([
     { role: "assistant", text: "Hi — I'm your WFM Copilot. Ask me about forecasts, staffing, adherence, or capacity. I read your live plan to answer." },
   ])
@@ -32,7 +31,7 @@ export function Copilot() {
 
   function answer(qText: string): string {
     const t = qText.toLowerCase()
-    const perQueue = QUEUES.map((q) => ({ q, sum: summarisePlan(buildPlan(forecasts[q.id], q.aht, q, shrinkage, agents)), bt: backtest(q.id) }))
+    const perQueue = queues.map((q) => ({ q, sum: summarisePlan(buildPlan(forecasts[q.id], q.aht, q, shrinkage, agents)), bt: backtest(q.id) }))
     const worst = perQueue.reduce((a, b) => (b.sum.wSL < a.sum.wSL ? b : a))
     if (t.includes("service level") || t.includes("risk") || t.includes("sla")) {
       return `${worst.q.name} is the most at-risk queue at ${fmtPct(worst.sum.wSL)} projected SL (target ${fmtPct(worst.q.slTarget)}), with ${worst.sum.underIntervals} under-staffed intervals. I'd pull cover toward its peak block.`

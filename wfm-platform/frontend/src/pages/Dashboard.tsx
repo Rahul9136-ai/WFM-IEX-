@@ -3,16 +3,17 @@ import { useMemo } from "react"
 
 import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
+import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { actualsFor, INTERVALS, inAdherence, QUEUES } from "@/lib/domain/seed"
+import { actualsFor, INTERVALS, inAdherence } from "@/lib/domain/seed"
 import { buildPlan, fmtPct, fmtSec, summarisePlan } from "@/lib/domain/planning"
 import { useWfm } from "@/store/wfm"
 
 export function Dashboard() {
-  const { forecasts, shrinkage, nowIdx, agents, rta, queueId } = useWfm()
-  const queue = QUEUES.find((q) => q.id === queueId)!
+  const { forecasts, shrinkage, nowIdx, agents, rta, queueId, queues } = useWfm()
+  const queue = queues.find((q) => q.id === queueId)!
   const volume = forecasts[queue.id]
 
   const plan = useMemo(() => buildPlan(volume, queue.aht, queue, shrinkage, agents), [volume, queue, shrinkage, agents])
@@ -27,7 +28,7 @@ export function Dashboard() {
   const coverageData = plan.map((p) => ({ label: p.label, Required: p.requiredGross, Scheduled: p.scheduled }))
 
   // centre-wide SL by queue
-  const queueSL = QUEUES.map((q) => {
+  const queueSL = queues.map((q) => {
     const p = buildPlan(forecasts[q.id], q.aht, q, shrinkage, agents)
     return { q, wSL: summarisePlan(p).wSL }
   })
@@ -48,7 +49,30 @@ export function Dashboard() {
 
   return (
     <>
-      <PageHeader title="Operations Dashboard" subtitle={`Live view · ${queue.name} · interval ${now.label}`} />
+      <PageHeader
+        title="Operations Dashboard"
+        subtitle={`Live view · ${queue.name} · interval ${now.label}`}
+        actions={
+          <ExportButton
+            filename={`dashboard-${queue.id}`}
+            sheets={() => [
+              { name: "KPIs", rows: [
+                { Metric: "Service Level", Value: fmtPct(now.projSL) },
+                { Metric: "ASA", Value: fmtSec(now.asa) },
+                { Metric: "Occupancy", Value: fmtPct(now.occupancy) },
+                { Metric: "Adherence", Value: fmtPct(adherence) },
+                { Metric: "Forecast volume", Value: sum.totalVol },
+                { Metric: "Required agent-hrs", Value: sum.reqHours.toFixed(0) },
+                { Metric: "Scheduled agent-hrs", Value: sum.schedHours.toFixed(0) },
+                { Metric: "Day service level", Value: fmtPct(sum.wSL) },
+              ] },
+              { name: "Intraday", rows: intradayData.map((d) => ({ Interval: d.label, Forecast: d.Forecast, Actual: d.Actual })) },
+              { name: "Coverage", rows: coverageData.map((d) => ({ Interval: d.label, Required: d.Required, Scheduled: d.Scheduled })) },
+              { name: "SL by Queue", rows: queueSL.map((x) => ({ Queue: x.q.name, "Service Level": fmtPct(x.wSL), Target: fmtPct(x.q.slTarget) })) },
+            ]}
+          />
+        }
+      />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiCard label="Service Level" value={fmtPct(now.projSL)} hint={`target ${fmtPct(queue.slTarget)} in ${queue.targetTime}s`} tone={now.projSL >= queue.slTarget ? "good" : "bad"} icon={Gauge} />

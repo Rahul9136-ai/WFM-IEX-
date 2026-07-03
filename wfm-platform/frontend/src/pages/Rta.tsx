@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react"
 
 import { AiSummary } from "@/components/ai-summary"
+import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
+import { PermissionGate } from "@/components/permission-gate"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Activity, PhoneCall, UserX, Zap } from "lucide-react"
-import { AUX, AUX_BY_CODE, inAdherence, QUEUES } from "@/lib/domain/seed"
+import { AUX, AUX_BY_CODE, inAdherence } from "@/lib/domain/seed"
 import { buildPlan, fmtPct } from "@/lib/domain/planning"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
@@ -14,7 +16,7 @@ import { useWfm } from "@/store/wfm"
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`
 
 export function Rta() {
-  const { agents, rta, recallAgent, recallMany, forecasts, shrinkage, nowIdx } = useWfm()
+  const { agents, rta, recallAgent, recallMany, forecasts, shrinkage, nowIdx, queues } = useWfm()
   const byId = useMemo(() => Object.fromEntries(agents.map((a) => [a.id, a])), [agents])
 
   const [tick, setTick] = useState(0)
@@ -27,14 +29,14 @@ export function Rta() {
 
   const underQueues = useMemo(
     () =>
-      QUEUES.filter((q) => {
+      queues.filter((q) => {
         const plan = buildPlan(forecasts[q.id], q.aht, q, shrinkage, agents)
         return plan[nowIdx].variance < 0
       }).map((q) => q.id),
-    [forecasts, shrinkage, agents, nowIdx],
+    [forecasts, shrinkage, agents, nowIdx, queues],
   )
   const slAtRisk = surge || underQueues.length > 0
-  const pressured = surge ? QUEUES.map((q) => q.id) : underQueues
+  const pressured = surge ? queues.map((q) => q.id) : underQueues
 
   const live = useMemo(
     () =>
@@ -74,7 +76,28 @@ export function Rta() {
 
   return (
     <>
-      <PageHeader title="Real-Time Monitor (RTA)" subtitle="AUX wallboard · live adherence · AI break recovery" />
+      <PageHeader
+        title="Real-Time Monitor (RTA)"
+        subtitle="AUX wallboard · live adherence · AI break recovery"
+        actions={
+          <ExportButton
+            filename="realtime-adherence"
+            sheets={() => [
+              { name: "KPIs", rows: [
+                { Metric: "Adherence", Value: fmtPct(stats.adherence) },
+                { Metric: "In adherence", Value: `${stats.inAdh}/${stats.total}` },
+                { Metric: "Off-plan", Value: stats.outAdh },
+                { Metric: "On the phones", Value: stats.onPhone },
+                { Metric: "Logged out", Value: stats.offline },
+                { Metric: "SL risk", Value: slAtRisk ? "At risk" : "Stable" },
+              ] },
+              { name: "AUX Distribution", rows: dist.map((a) => ({ Code: a.code, State: a.label, Category: a.cat, Agents: a.count })) },
+              { name: "Agent States", rows: live.map((r) => ({ Name: r.agent.name, Team: r.agent.team, "Actual state": r.aux?.label, "Scheduled state": AUX_BY_CODE[r.scheduled]?.label, Adherence: inAdherence(r.actual, r.scheduled) ? "In" : "Out", "Time (s)": r.live })) },
+              { name: "Break Recovery", rows: recs.map((r) => ({ Name: r.name, "On break": r.aux, "Team Lead": r.tl, Helps: r.helps.map((h) => queues.find((q) => q.id === h)?.name).join(", ") })) },
+            ]}
+          />
+        }
+      />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiCard label="Adherence" value={fmtPct(stats.adherence)} hint={`${stats.inAdh}/${stats.total} on plan`} tone={stats.adherence >= 0.9 ? "good" : stats.adherence >= 0.8 ? "warn" : "bad"} icon={Activity} />
@@ -108,18 +131,22 @@ export function Rta() {
                           {r.name} <span className="font-normal text-muted-foreground">· {r.aux}</span>
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          helps {r.helps.map((h) => QUEUES.find((q) => q.id === h)?.name).join(", ")} · TL <b>{r.tl}</b>
+                          helps {r.helps.map((h) => queues.find((q) => q.id === h)?.name).join(", ")} · TL <b>{r.tl}</b>
                         </div>
                       </div>
-                      <Button size="sm" className="ml-auto" onClick={() => recallAgent(r.id)}>
-                        Recall
-                      </Button>
+                      <PermissionGate module="realtime" fallback={<span className="ml-auto text-xs text-muted-foreground">view only</span>}>
+                        <Button size="sm" className="ml-auto" onClick={() => recallAgent(r.id)}>
+                          Recall
+                        </Button>
+                      </PermissionGate>
                     </div>
                   ))}
                 </div>
-                <Button className="mt-3 w-full" onClick={() => recallMany(recs.map((r) => r.id))}>
-                  Recall all {recs.length} & notify TLs
-                </Button>
+                <PermissionGate module="realtime">
+                  <Button className="mt-3 w-full" onClick={() => recallMany(recs.map((r) => r.id))}>
+                    Recall all {recs.length} & notify TLs
+                  </Button>
+                </PermissionGate>
               </>
             )}
           </CardContent>

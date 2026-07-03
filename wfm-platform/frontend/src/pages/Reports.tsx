@@ -1,6 +1,7 @@
 import { useMemo } from "react"
 
 import { SeriesChart } from "@/components/charts/series-chart"
+import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -8,7 +9,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Activity, BarChart3, CalendarRange, Gauge, LineChart, Users } from "lucide-react"
 import { backtest } from "@/lib/domain/forecast"
 import { buildPlan, fmtPct, summarisePlan } from "@/lib/domain/planning"
-import { INTERVALS, QUEUES } from "@/lib/domain/seed"
+import { INTERVALS } from "@/lib/domain/seed"
+import { allReportSheets } from "@/lib/report-data"
 import { useWfm } from "@/store/wfm"
 
 const REPORTS = [
@@ -21,15 +23,15 @@ const REPORTS = [
 ]
 
 export function Reports() {
-  const { forecasts, shrinkage, agents } = useWfm()
+  const { forecasts, shrinkage, agents, rta, queues } = useWfm()
 
   const perQueue = useMemo(
     () =>
-      QUEUES.map((q) => {
+      queues.map((q) => {
         const plan = buildPlan(forecasts[q.id], q.aht, q, shrinkage, agents)
         return { q, plan, sum: summarisePlan(plan), bt: backtest(q.id) }
       }),
-    [forecasts, shrinkage, agents],
+    [forecasts, shrinkage, agents, queues],
   )
 
   const centreVol = perQueue.reduce((a, x) => a + x.sum.totalVol, 0)
@@ -45,7 +47,18 @@ export function Reports() {
 
   return (
     <>
-      <PageHeader title="Reports & KPIs" subtitle="Centre-wide analytics across all queues" />
+      <PageHeader
+        title="Reports & KPIs"
+        subtitle="Centre-wide analytics across all queues"
+        actions={
+          <ExportButton
+            filename="flowforce-all-kpis"
+            variant="default"
+            label="Export all KPIs"
+            sheets={() => allReportSheets(forecasts, shrinkage, agents, rta, queues)}
+          />
+        }
+      />
 
       <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiCard label="Centre volume" value={centreVol.toLocaleString()} hint="contacts today" icon={LineChart} />
